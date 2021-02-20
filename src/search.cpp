@@ -37,6 +37,7 @@
 #include "tt.h"
 #include "uci.h"
 #include "syzygy/tbprobe.h"
+#include "random_select.h"
 
 namespace Search {
 
@@ -252,65 +253,24 @@ void MainThread::search() {
   }
   else
   {
-      Threads.start_searching(); // start non-main threads
-      Thread::search();          // main thread start searching
+      auto randomMove = random_selector(rootMoves);
+      if (Options["Protocol"] == "xboard")
+      {
+          // Send move only when not in analyze mode and not at game end
+          if (!Options["UCI_AnalyseMode"] && randomMove.pv[0] != MOVE_NONE && !Threads.abort.exchange(true))
+              sync_cout << "move " << UCI::move(rootPos, randomMove.pv[0]) << sync_endl;
+          return;
+      }
+
+      sync_cout << "bestmove " << UCI::move(rootPos, randomMove.pv[0]);
+
+      if (randomMove.pv.size() > 1 || randomMove.extract_ponder_from_tt(rootPos))
+          std::cout << " ponder " << UCI::move(rootPos, randomMove.pv[1]);
+
+      std::cout << sync_endl;
+
   }
 
-  if (rootPos.two_boards() && !Threads.abort && Options["Protocol"] == "xboard")
-  {
-      while (!Threads.stop && (Partner.sitRequested || Partner.weDead) && Time.elapsed() < Limits.time[us] - 1000)
-      {}
-  }
-
-  // When we reach the maximum depth, we can arrive here without a raise of
-  // Threads.stop. However, if we are pondering or in an infinite search,
-  // the UCI protocol states that we shouldn't print the best move before the
-  // GUI sends a "stop" or "ponderhit" command. We therefore simply wait here
-  // until the GUI sends one of those commands.
-
-  while (!Threads.stop && (ponder || Limits.infinite))
-  {} // Busy wait for a stop or a ponder reset
-
-  // Stop the threads if not already stopped (also raise the stop if
-  // "ponderhit" just reset Threads.ponder).
-  Threads.stop = true;
-
-  // Wait until all threads have finished
-  Threads.wait_for_search_finished();
-
-  // When playing in 'nodes as time' mode, subtract the searched nodes from
-  // the available ones before exiting.
-  if (Limits.npmsec)
-      Time.availableNodes += Limits.inc[us] - Threads.nodes_searched();
-
-  bestThread = this;
-
-  if (   int(Options["MultiPV"]) == 1
-      && !Limits.depth
-      && !(Skill(Options["Skill Level"]).enabled() || int(Options["UCI_LimitStrength"]))
-      && rootMoves[0].pv[0] != MOVE_NONE)
-      bestThread = Threads.get_best_thread();
-
-  bestPreviousScore = bestThread->rootMoves[0].score;
-
-  // Send again PV info if we have a new best thread
-  if (bestThread != this)
-      sync_cout << UCI::pv(bestThread->rootPos, bestThread->completedDepth, -VALUE_INFINITE, VALUE_INFINITE) << sync_endl;
-
-  if (Options["Protocol"] == "xboard")
-  {
-      // Send move only when not in analyze mode and not at game end
-      if (!Options["UCI_AnalyseMode"] && rootMoves[0].pv[0] != MOVE_NONE && !Threads.abort.exchange(true))
-          sync_cout << "move " << UCI::move(rootPos, bestThread->rootMoves[0].pv[0]) << sync_endl;
-      return;
-  }
-
-  sync_cout << "bestmove " << UCI::move(rootPos, bestThread->rootMoves[0].pv[0]);
-
-  if (bestThread->rootMoves[0].pv.size() > 1 || bestThread->rootMoves[0].extract_ponder_from_tt(rootPos))
-      std::cout << " ponder " << UCI::move(rootPos, bestThread->rootMoves[0].pv[1]);
-
-  std::cout << sync_endl;
 }
 
 
